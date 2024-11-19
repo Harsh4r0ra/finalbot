@@ -26,6 +26,10 @@ import json
 
 # Load environment variables
 load_dotenv()
+# After load_dotenv()
+print("Discord Token:", BotConfig.DISCORD_TOKEN)
+print("Client ID:", BotConfig.DISCORD_CLIENT_ID)
+print("Guild ID:", BotConfig.GUILD_ID)
 
 # Global Configuration
 XP_PER_MESSAGE = 1
