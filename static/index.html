@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Discord Bot Dashboard</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100">
+    <div class="container mx-auto px-4 py-8">
+        <h1 class="text-3xl font-bold mb-8">Discord Server Analytics</h1>
+        
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div class="bg-white p-6 rounded-lg shadow-lg">
+                <h2 class="text-xl font-semibold mb-4">User Activity</h2>
+                <div id="activityGraph"></div>
+            </div>
+            
+            <div class="bg-white p-6 rounded-lg shadow-lg">
+                <h2 class="text-xl font-semibold mb-4">Top Users</h2>
+                <div id="leaderboard" class="space-y-2"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function fetchData() {
+            try {
+                // Fetch stats
+                const statsResponse = await fetch('/api/chat-stats');
+                if (!statsResponse.ok) {
+                    throw new Error(`HTTP error! status: ${statsResponse.status}`);
+                }
+                const stats = await statsResponse.json();
+                
+                // Fetch graph data
+                const graphResponse = await fetch('/api/activity-graph');
+                if (!graphResponse.ok) {
+                    throw new Error(`HTTP error! status: ${graphResponse.status}`);
+                }
+                const graphData = await graphResponse.json();
+                
+                // Update activity graph
+                Plotly.newPlot('activityGraph', graphData.data, graphData.layout);
+                
+                // Update leaderboard
+                const leaderboardEl = document.getElementById('leaderboard');
+                const sortedUsers = stats.sort((a, b) => b.message_count - a.message_count).slice(0, 10);
+                
+                leaderboardEl.innerHTML = sortedUsers.map((user, index) => `
+                    <div class="flex items-center justify-between p-3 bg-gray-50 rounded">
+                        <div>
+                            <span class="font-bold">${index + 1}. ${user.username}</span>
+                            <span class="text-sm text-gray-600">Level ${user.level}</span>
+                        </div>
+                        <div class="text-right">
+                            <div class="font-medium">${user.message_count} messages</div>
+                            <div class="text-sm text-gray-600">${Math.floor(user.xp)} XP</div>
+                        </div>
+                    </div>
+                `).join('');
+            } catch (error) {
+                console.error('Error fetching data:', error);
+                document.getElementById('activityGraph').innerHTML = '<p class="text-red-500">Error loading activity graph</p>';
+                document.getElementById('leaderboard').innerHTML = '<p class="text-red-500">Error loading leaderboard data</p>';
+            }
+        }
+
+        // Initial load
+        fetchData();
+        
+        // Refresh every 30 seconds
+        setInterval(fetchData, 10000);
+    </script>
+</body>
+</html>
