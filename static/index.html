@@ -27,14 +27,12 @@
     <script>
         async function fetchData() {
             try {
-                // Fetch stats
                 const statsResponse = await fetch('/api/chat-stats');
                 if (!statsResponse.ok) {
                     throw new Error(`HTTP error! status: ${statsResponse.status}`);
                 }
                 const stats = await statsResponse.json();
                 
-                // Fetch graph data
                 const graphResponse = await fetch('/api/activity-graph');
                 if (!graphResponse.ok) {
                     throw new Error(`HTTP error! status: ${graphResponse.status}`);
@@ -62,8 +60,6 @@
                 `).join('');
             } catch (error) {
                 console.error('Error fetching data:', error);
-                document.getElementById('activityGraph').innerHTML = '<p class="text-red-500">Error loading activity graph</p>';
-                document.getElementById('leaderboard').innerHTML = '<p class="text-red-500">Error loading leaderboard data</p>';
             }
         }
 
@@ -71,7 +67,7 @@
         fetchData();
         
         // Refresh every 30 seconds
-        setInterval(fetchData, 10000);
+        setInterval(fetchData, 30000);
     </script>
 </body>
 </html>

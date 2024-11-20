@@ -20,12 +20,10 @@ from dotenv import load_dotenv
 import asyncio
 import uvicorn
 from threading import Thread
-from pydantic import BaseModel
-from typing import List, Dict, Any
-import json
 
 # Load environment variables
 load_dotenv()
+
 # Global Configuration
 XP_PER_MESSAGE = 1
 LEVEL_THRESHOLD = 100
@@ -63,111 +61,15 @@ class MessageLog(Base):
     level = Column(Integer, default=1)
     xp = Column(Float, default=0)
 
-# Create static directory
-static_path = Path("static")
-static_path.mkdir(exist_ok=True)
-
-# Define response models
-class UserStats(BaseModel):
-    user_id: str
-    username: str
-    message_count: int
-    level: int
-    xp: float
-
-class ActivityGraphData(BaseModel):
-    data: List[Dict[str, Any]]
-    layout: Dict[str, Any]
-
 # Bot Configuration
 class BotConfig:
-    _instance = None
-    
-    def __init__(self):
-        if BotConfig._instance is not None:
-            raise Exception("BotConfig is a singleton!")
-        self.config = self.validate_config()
-        BotConfig._instance = self
-    
-    @staticmethod
-    def get_instance():
-        if BotConfig._instance is None:
-            BotConfig._instance = BotConfig()
-        return BotConfig._instance
-    
-    @staticmethod
-    def validate_token(token):
-        """Validate Discord token format."""
-        if not token:
-            raise ValueError("Discord token cannot be empty")
-        
-        # Basic token format validation
-        if len(token) < 50 or '.' not in token:
-            raise ValueError("Discord token appears to be malformed")
-            
-        if token.count('.') != 2:
-            raise ValueError("Discord token should contain exactly two dots")
-            
-        if any(c.isspace() for c in token):
-            raise ValueError("Discord token contains whitespace characters")
-            
-        return token.strip()
-
-    def validate_config(self):
-        missing_vars = []
-        
-        # Check required environment variables
-        required_vars = {
-            'DISCORD_TOKEN': os.getenv('DISCORD_TOKEN'),
-            'DISCORD_CLIENT_ID': os.getenv('DISCORD_CLIENT_ID'),
-            'GUILD_ID': os.getenv('GUILD_ID'),
-            'GEMINI_API_KEY': os.getenv('GEMINI_API_KEY')
-        }
-        
-        for var_name, value in required_vars.items():
-            if not value:
-                missing_vars.append(var_name)
-        
-        if missing_vars:
-            raise ValueError(f"Missing required environment variables: {', '.join(missing_vars)}")
-        
-        try:
-            guild_id = int(required_vars['GUILD_ID'])
-        except ValueError:
-            raise ValueError("GUILD_ID must be a valid integer")
-        
-        try:
-            token = self.validate_token(required_vars['DISCORD_TOKEN'])
-        except ValueError as e:
-            raise ValueError(f"Token validation failed: {str(e)}")
-        
-        return {
-            'DISCORD_TOKEN': token,
-            'DISCORD_CLIENT_ID': required_vars['DISCORD_CLIENT_ID'],
-            'GUILD_ID': guild_id,
-            'GEMINI_API_KEY': required_vars['GEMINI_API_KEY']
-        }
-    
-    @property
-    def DISCORD_TOKEN(self):
-        return self.config['DISCORD_TOKEN']
-    
-    @property
-    def DISCORD_CLIENT_ID(self):
-        return self.config['DISCORD_CLIENT_ID']
-    
-    @property
-    def GUILD_ID(self):
-        return self.config['GUILD_ID']
-    
-    @property
-    def GEMINI_API_KEY(self):
-        return self.config['GEMINI_API_KEY']
-
-config = BotConfig.get_instance()
+    DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
+    DISCORD_CLIENT_ID = os.getenv('DISCORD_CLIENT_ID')
+    GUILD_ID = int(os.getenv('GUILD_ID'))
+    GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 
 # Initialize Gemini
-genai.configure(api_key=config.GEMINI_API_KEY)
+genai.configure(api_key=BotConfig.GEMINI_API_KEY)
 model = genai.GenerativeModel('gemini-pro')
 
 def split_response(text, limit=1900):
@@ -303,70 +205,37 @@ static_path = Path("static")
 static_path.mkdir(exist_ok=True)
 
 # Define API routes before mounting static files
-@app.get("/api/chat-stats", response_model=List[UserStats])
+@app.get("/api/chat-stats", response_model=list)
 async def get_chat_stats():
     try:
         session = bot.Session()
         stats = session.query(MessageLog).all()
-        result = [
-            UserStats(
-                user_id=stat.user_id,
-                username=stat.username,
-                message_count=stat.message_count,
-                level=stat.level,
-                xp=stat.xp
-            ) for stat in stats
-        ]
+        result = [{
+            "user_id": stat.user_id,
+            "username": stat.username,
+            "message_count": stat.message_count,
+            "level": stat.level,
+            "xp": stat.xp
+        } for stat in stats]
+        session.close()
         return result
     except Exception as e:
         logger.error(f"Error getting chat stats: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        session.close()
 
-
-@app.get("/api/activity-graph", response_model=ActivityGraphData)
+@app.get("/api/activity-graph")
 async def get_activity_graph():
     try:
         log_file = bot.get_current_log_file()
         if not os.path.exists(log_file):
-            return ActivityGraphData(data=[], layout={})
+            return {"data": [], "layout": {}}
 
-        # Read the CSV file
         df = pd.read_csv(log_file)
+        df['timestamp'] = pd.to_datetime(df['timestamp'])
         
-        # Convert timestamp using a more flexible approach
-        try:
-            # Try parsing with exact format first
-            df['timestamp'] = pd.to_datetime(df['timestamp'], format='%Y-%m-%d %H:%M:%S.%f')
-        except ValueError:
-            try:
-                # If that fails, try automatic parsing
-                df['timestamp'] = pd.to_datetime(df['timestamp'], format='mixed')
-            except Exception:
-                try:
-                    # Last resort: try parsing as is
-                    df['timestamp'] = pd.to_datetime(df['timestamp'])
-                except Exception as e:
-                    logger.error(f"Failed to parse timestamps: {str(e)}")
-                    return ActivityGraphData(data=[], layout={})
-
-        # Print some debug information
-        logger.info(f"Sample timestamp from data: {df['timestamp'].iloc[0] if len(df) > 0 else 'No data'}")
-        
-        # Group by hour and count messages
         hourly_activity = df.groupby(df['timestamp'].dt.hour)['message_content'].count().reset_index()
         hourly_activity.columns = ['hour', 'message_count']
-        
-        # Ensure we have all hours represented (0-23)
-        all_hours = pd.DataFrame({'hour': range(24)})
-        hourly_activity = pd.merge(all_hours, hourly_activity, on='hour', how='left')
-        hourly_activity['message_count'] = hourly_activity['message_count'].fillna(0)
-        
-        # Sort by hour
-        hourly_activity = hourly_activity.sort_values('hour')
 
-        # Create the plot
         fig = px.bar(
             hourly_activity,
             x='hour',
@@ -375,47 +244,16 @@ async def get_activity_graph():
             labels={'hour': 'Hour of Day', 'message_count': 'Number of Messages'}
         )
 
-        # Customize the layout
-        fig.update_layout(
-            xaxis=dict(
-                tickmode='array',
-                ticktext=[f'{h:02d}:00' for h in range(24)],
-                tickvals=list(range(24)),
-                title='Hour of Day'
-            ),
-            yaxis=dict(
-                title='Number of Messages',
-                gridcolor='rgba(0,0,0,0.1)'
-            ),
-            plot_bgcolor='white',
-            bargap=0.2
-        )
-
-        # Convert to JSON-serializable format
-        fig_dict = fig.to_dict()
-        
-        # Use a custom JSON encoder for safety
-        def json_encode_safe(obj):
-            if isinstance(obj, (datetime, pd.Timestamp)):
-                return obj.isoformat()
-            return str(obj)
-        
-        cleaned_data = json.loads(json.dumps(fig_dict['data'], default=json_encode_safe))
-        cleaned_layout = json.loads(json.dumps(fig_dict['layout'], default=json_encode_safe))
-
-        return ActivityGraphData(
-            data=cleaned_data,
-            layout=cleaned_layout
-        )
+        return {
+            "data": fig.data,
+            "layout": fig.layout
+        }
     except Exception as e:
         logger.error(f"Error generating activity graph: {str(e)}")
-        # Log the full traceback for debugging
-        import traceback
-        logger.error(f"Full traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
-    
-# Dashboard HTML
+
+# Save the HTML file
 dashboard_html = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -445,14 +283,12 @@ dashboard_html = """<!DOCTYPE html>
     <script>
         async function fetchData() {
             try {
-                // Fetch stats
                 const statsResponse = await fetch('/api/chat-stats');
                 if (!statsResponse.ok) {
                     throw new Error(`HTTP error! status: ${statsResponse.status}`);
                 }
                 const stats = await statsResponse.json();
                 
-                // Fetch graph data
                 const graphResponse = await fetch('/api/activity-graph');
                 if (!graphResponse.ok) {
                     throw new Error(`HTTP error! status: ${graphResponse.status}`);
@@ -480,8 +316,6 @@ dashboard_html = """<!DOCTYPE html>
                 `).join('');
             } catch (error) {
                 console.error('Error fetching data:', error);
-                document.getElementById('activityGraph').innerHTML = '<p class="text-red-500">Error loading activity graph</p>';
-                document.getElementById('leaderboard').innerHTML = '<p class="text-red-500">Error loading leaderboard data</p>';
             }
         }
 
@@ -489,21 +323,18 @@ dashboard_html = """<!DOCTYPE html>
         fetchData();
         
         // Refresh every 30 seconds
-        setInterval(fetchData, 10000);
+        setInterval(fetchData, 30000);
     </script>
 </body>
-</html>"""
+</html>
+"""
 
 
-# Write dashboard HTML file
-try:
-    with open(static_path / "index.html", "w", encoding="utf-8") as f:
-        f.write(dashboard_html)
-    print(f"Dashboard HTML file created successfully at {static_path / 'index.html'}")
-except Exception as e:
-    print(f"Error creating dashboard HTML file: {str(e)}")
+# Write the dashboard HTML file
+with open(static_path / "index.html", "w", encoding="utf-8") as f:
+    f.write(dashboard_html)
 
-# Mount static files after writing HTML
+# Mount static files AFTER defining API routes
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
 
 
@@ -678,69 +509,27 @@ async def on_message(message):
         logger.error(f"Error in on_message: {str(e)}")
 
 @bot.event
-async def on_message(message):
+async def on_ready():
+    logger.info(f'Bot is ready! Logged in as {bot.user.name}')
+
+# FastAPI Endpoints
+@app.get("/api/chat-stats")
+async def get_chat_stats():
     try:
-        if message.guild.id != BotConfig.GUILD_ID or message.author == bot.user:
-            return
-
         session = bot.Session()
-        try:
-            user_log = session.query(MessageLog)\
-                .filter_by(user_id=str(message.author.id))\
-                .first()
-
-            if user_log:
-                # Update existing user log
-                user_log.message_count += 1
-                user_log.xp += XP_PER_MESSAGE
-                user_log.timestamp = datetime.utcnow()
-                
-                # Level up check
-                new_level = int(user_log.xp / LEVEL_THRESHOLD) + 1
-                if new_level > user_log.level:
-                    user_log.level = new_level
-                    await message.channel.send(f"🎉 Congratulations {message.author.mention}! You've reached level {new_level}!")
-            else:
-                # Create new user log
-                user_log = MessageLog(
-                    user_id=str(message.author.id),
-                    username=message.author.name,
-                    channel_id=str(message.channel.id),
-                    channel_name=message.channel.name,
-                    message_count=1,
-                    xp=XP_PER_MESSAGE,
-                    level=1
-                )
-                session.add(user_log)
-
-            # Log message to CSV with consistent timestamp format
-            current_time = datetime.utcnow()
-            formatted_time = current_time.strftime('%Y-%m-%d %H:%M:%S.%f')
-            
-            with open(bot.get_current_log_file(), 'a', newline='', encoding='utf-8') as f:
-                writer = csv.writer(f)
-                writer.writerow([
-                    formatted_time,
-                    message.author.id,
-                    message.author.name,
-                    message.channel.id,
-                    message.channel.name,
-                    message.content,
-                    'message',
-                    user_log.level,
-                    user_log.xp
-                ])
-
-            session.commit()
-            
-        except Exception as e:
-            logger.error(f"Error processing message: {str(e)}")
-            session.rollback()
-        finally:
-            session.close()
-
+        stats = session.query(MessageLog).all()
+        return [{
+            "user_id": stat.user_id,
+            "username": stat.username,
+            "message_count": stat.message_count,
+            "level": stat.level,
+            "xp": stat.xp
+        } for stat in stats]
     except Exception as e:
-        logger.error(f"Error in on_message: {str(e)}")
+        logger.error(f"Error getting chat stats: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        session.close()
 
 @app.get("/api/activity-graph")
 async def get_activity_graph():
@@ -781,22 +570,13 @@ def run_fastapi():
     uvicorn.run(app, host="0.0.0.0", port=8000)
 
 if __name__ == "__main__":
-    # Initialize logging first
-    logger = setup_logging()
+    # Start Discord bot and FastAPI server in separate threads
+    discord_thread = Thread(target=run_discord_bot)
+    api_thread = Thread(target=run_fastapi)
     
-    try:
-        # Test configuration before starting threads
-        BotConfig.validate_config()
-        
-        discord_thread = Thread(target=run_discord_bot)
-        api_thread = Thread(target=run_fastapi)
-        
-        discord_thread.start()
-        api_thread.start()
-        
-        discord_thread.join()
-        api_thread.join()
-    except Exception as e:
-        logger.error(f"Startup error: {str(e)}")
-        print(f"\nError during startup: {str(e)}")
-        sys.exit(1)
+    discord_thread.start()
+    api_thread.start()
+    
+    # Wait for both threads
+    discord_thread.join()
+    api_thread.join()
